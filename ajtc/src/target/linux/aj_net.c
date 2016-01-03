@@ -99,7 +99,6 @@ static const char MDNS_IPV6_MULTICAST_GROUP[] = "ff02::fb";
  * Target-specific contexts for network I/O
  */
 typedef struct {
-    int tcpSock;
     int udpSock;
 } NetContext;
 
@@ -113,7 +112,7 @@ typedef struct {
     uint16_t mDnsRecvPort;
 } MCastContext;
 
-static NetContext netContext = { INVALID_SOCKET, INVALID_SOCKET };
+static NetContext netContext = { INVALID_SOCKET };
 static MCastContext mCastContext = { INVALID_SOCKET, INVALID_SOCKET, INVALID_SOCKET, INVALID_SOCKET };
 
 #ifdef AJ_ARDP
@@ -125,26 +124,6 @@ static void AJ_Net_ARDP_Disconnect(AJ_NetSocket* netSock);
 
 #endif // AJ_ARDP
 
-#ifdef AJ_TCP
-#error TCP is on!
-static AJ_Status CloseNetSock(AJ_NetSocket* netSock)
-{
-    NetContext* context = (NetContext*)netSock->rx.context;
-    if (context) {
-        if (context->tcpSock != INVALID_SOCKET) {
-            struct linger l;
-            l.l_onoff = 1;
-            l.l_linger = 0;
-            setsockopt(context->tcpSock, SOL_SOCKET, SO_LINGER, (void*)&l, sizeof(l));
-            shutdown(context->tcpSock, SHUT_RDWR);
-            close(context->tcpSock);
-        }
-        context->tcpSock = INVALID_SOCKET;
-        memset(netSock, 0, sizeof(AJ_NetSocket));
-    }
-    return AJ_OK;
-}
-#endif
 
 static AJ_Status CloseMCastSock(AJ_MCastSocket* mcastSock)
 {
@@ -171,33 +150,7 @@ static AJ_Status CloseMCastSock(AJ_MCastSocket* mcastSock)
     return AJ_OK;
 }
 
-#ifdef AJ_TCP
-AJ_Status AJ_Net_Send(AJ_IOBuffer* buf)
-{
-    NetContext* context = (NetContext*) buf->context;
-    ssize_t ret;
-    size_t tx = AJ_IO_BUF_AVAIL(buf);
 
-    AJ_InfoPrintf(("AJ_Net_Send(buf=0x%p)\n", buf));
-
-    assert(buf->direction == AJ_IO_BUF_TX);
-
-    if (tx > 0) {
-        ret = send(context->tcpSock, buf->readPtr, tx, MSG_NOSIGNAL);
-        if (ret == -1) {
-            AJ_ErrPrintf(("AJ_Net_Send(): send() failed. errno=\"%s\", status=AJ_ERR_WRITE\n", strerror(errno)));
-            return AJ_ERR_WRITE;
-        }
-        buf->readPtr += ret;
-    }
-    if (AJ_IO_BUF_AVAIL(buf) == 0) {
-        AJ_IO_BUF_RESET(buf);
-    }
-
-    AJ_InfoPrintf(("AJ_Net_Send(): status=AJ_OK\n"));
-    return AJ_OK;
-}
-#endif
 
 /*
  * An eventfd handle used for interrupting a network read blocked on select
@@ -222,126 +175,11 @@ void AJ_Net_Interrupt()
     }
 }
 
-#ifdef AJ_TCP
-AJ_Status AJ_Net_Recv(AJ_IOBuffer* buf, uint32_t len, uint32_t timeout)
-{
-    NetContext* context = (NetContext*) buf->context;
-    AJ_Status status = AJ_OK;
-    size_t rx = AJ_IO_BUF_SPACE(buf);
-    fd_set fds;
-    int rc = 0;
-    int maxFd = context->tcpSock;
-    struct timeval tv = { timeout / 1000, 1000 * (timeout % 1000) };
-
-    // AJ_InfoPrintf(("AJ_Net_Recv(buf=0x%p, len=%d, timeout=%d)\n", buf, len, timeout));
-
-    assert(buf->direction == AJ_IO_BUF_RX);
-
-    FD_ZERO(&fds);
-    FD_SET(context->tcpSock, &fds);
-    if (interruptFd >= 0) {
-        FD_SET(interruptFd, &fds);
-        maxFd = max(maxFd, interruptFd);
-    }
-    blocked = TRUE;
-    rc = select(maxFd + 1, &fds, NULL, NULL, &tv);
-    blocked = FALSE;
-    if (rc == 0) {
-        return AJ_ERR_TIMEOUT;
-    }
-    if ((interruptFd >= 0) && FD_ISSET(interruptFd, &fds)) {
-        uint64_t u64;
-        if (read(interruptFd, &u64, sizeof(u64)) < 0) {
-            AJ_ErrPrintf(("AJ_Net_Recv(): read() failed during interrupt. errno=\"%s\"\n", strerror(errno)));
-        }
-        return AJ_ERR_INTERRUPTED;
-    }
-    rx = min(rx, len);
-    if (rx) {
-        ssize_t ret = recv(context->tcpSock, buf->writePtr, rx, 0);
-        if ((ret == -1) || (ret == 0)) {
-            AJ_ErrPrintf(("AJ_Net_Recv(): recv() failed. errno=\"%s\"\n", strerror(errno)));
-            status = AJ_ERR_READ;
-        } else {
-            AJ_InfoPrintf(("AJ_Net_Recv(): recv'd %d from tcp\n", ret));
-            buf->writePtr += ret;
-        }
-    }
-    return status;
-}
-#endif
 
 static uint8_t rxData[AJ_RX_DATA_SIZE];
 static uint8_t txData[AJ_TX_DATA_SIZE];
 
-#ifdef AJ_TCP
-static AJ_Status AJ_TCP_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
-{
-    int ret;
-    struct sockaddr_storage addrBuf;
-    socklen_t addrSize;
-    int tcpSock = INVALID_SOCKET;
 
-    interruptFd = eventfd(0, O_NONBLOCK);  // Use O_NONBLOCK instead of EFD_NONBLOCK due to bug in OpenWrt's uCLibc
-    if (interruptFd < 0) {
-        AJ_ErrPrintf(("AJ_TCP_Connect(): failed to created interrupt event\n"));
-        goto ConnectError;
-    }
-
-    memset(&addrBuf, 0, sizeof(addrBuf));
-
-    tcpSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (tcpSock == INVALID_SOCKET) {
-        AJ_ErrPrintf(("AJ_TCP_Connect(): socket() failed.  status=AJ_ERR_CONNECT\n"));
-        goto ConnectError;
-    }
-    if (service->addrTypes & AJ_ADDR_TCP4) {
-        struct sockaddr_in* sa = (struct sockaddr_in*)&addrBuf;
-        sa->sin_family = AF_INET;
-        sa->sin_port = htons(service->ipv4port);
-        sa->sin_addr.s_addr = service->ipv4;
-        addrSize = sizeof(struct sockaddr_in);
-        AJ_InfoPrintf(("AJ_TCP_Connect(): Connect to \"%s:%u\"\n", inet_ntoa(sa->sin_addr), service->ipv4port));;
-    } else if (service->addrTypes & AJ_ADDR_TCP6) {
-        struct sockaddr_in6* sa = (struct sockaddr_in6*)&addrBuf;
-        sa->sin6_family = AF_INET6;
-        sa->sin6_port = htons(service->ipv6port);
-        memcpy(sa->sin6_addr.s6_addr, service->ipv6, sizeof(sa->sin6_addr.s6_addr));
-        addrSize = sizeof(struct sockaddr_in6);
-    } else {
-        AJ_ErrPrintf(("AJ_TCP_Connect(): Invalid addrTypes %u, status=AJ_ERR_CONNECT\n", service->addrTypes));
-        goto ConnectError;
-    }
-
-
-    ret = connect(tcpSock, (struct sockaddr*)&addrBuf, addrSize);
-    if (ret < 0) {
-        AJ_ErrPrintf(("AJ_TCP_Connect(): connect() failed. errno=\"%s\", status=AJ_ERR_CONNECT\n", strerror(errno)));
-        goto ConnectError;
-    } else {
-        netContext.tcpSock = tcpSock;
-        AJ_IOBufInit(&bus->sock.rx, rxData, sizeof(rxData), AJ_IO_BUF_RX, &netContext);
-        bus->sock.rx.recv = AJ_Net_Recv;
-        AJ_IOBufInit(&bus->sock.tx, txData, sizeof(txData), AJ_IO_BUF_TX, &netContext);
-        bus->sock.tx.send = AJ_Net_Send;
-        AJ_InfoPrintf(("AJ_TCP_Connect(): status=AJ_OK\n"));
-    }
-
-    return AJ_OK;
-
-ConnectError:
-    if (interruptFd != INVALID_SOCKET) {
-        close(interruptFd);
-        interruptFd = INVALID_SOCKET;
-    }
-
-    if (tcpSock != INVALID_SOCKET) {
-        close(tcpSock);
-    }
-
-    return AJ_ERR_CONNECT;
-}
-#endif
 
 
 AJ_Status AJ_Net_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
@@ -355,18 +193,12 @@ AJ_Status AJ_Net_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
     if (service->addrTypes & (AJ_ADDR_UDP4 | AJ_ADDR_UDP6)) {
         status = AJ_Net_ARDP_Connect(bus, service);
         if (status == AJ_OK) {
-            printf("Exit AJ_Net_Connect\n");
+            printf("Exit AJ_Net_Connect. return AJ_OK\n");
             return status;
         }
     }
 #endif
-
-#ifdef AJ_TCP
-    if (service->addrTypes & (AJ_ADDR_TCP4 | AJ_ADDR_TCP6)) {
-        status = AJ_TCP_Connect(bus, service);
-    }
-#endif
-
+    printf("Exit AJ_Net_Connect. Return status\n");
     return status;
 }
 
@@ -384,10 +216,6 @@ void AJ_Net_Disconnect(AJ_NetSocket* netSock)
         AJ_Net_ARDP_Disconnect(netSock);
         memset(netSock, 0, sizeof(AJ_NetSocket));
         printf("Exit AJ_Net_Disconnect\n");
-#endif
-    } else if (netContext.tcpSock != INVALID_SOCKET) {
-#ifdef AJ_TCP
-        CloseNetSock(netSock);
 #endif
     }
 }
