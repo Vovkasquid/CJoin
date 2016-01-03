@@ -126,6 +126,7 @@ static void AJ_Net_ARDP_Disconnect(AJ_NetSocket* netSock);
 #endif // AJ_ARDP
 
 #ifdef AJ_TCP
+#error TCP is on!
 static AJ_Status CloseNetSock(AJ_NetSocket* netSock)
 {
     NetContext* context = (NetContext*)netSock->rx.context;

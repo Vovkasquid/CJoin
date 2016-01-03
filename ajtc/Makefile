@@ -214,7 +214,8 @@ FLAGS = 	-mthumb \
 
 
 			
-COMPILER = arm-none-eabi-gcc.exe
+#COMPILER = arm-none-eabi-gcc.exe
+COMPILER = gcc
 
 SOURCE_FILES :=	$(FREE_RTOS_DIR)/Source/croutine.c \
 				$(FREE_RTOS_DIR)/Source/list.c \
@@ -318,7 +319,7 @@ SAMPLE_OBJECTS = $(SAMPLE_FILES:.c=.o)
 DFILES = $(SOURCE_FILES:.c=.d)
 EXECUTABLES = $(TEST_FILES:.c=.elf)
 
-test: $(TEST_FILES) $(TEST_OBJECTS) $(OBJECTS)
+#test: $(TEST_FILES) $(TEST_OBJECTS) $(OBJECTS)
 sample: $(SAMPLE_FILES) $(SAMPLE_OBJECTS) $(OBJECTS)
 
 
