@@ -319,6 +319,7 @@ static AJ_Status InitConnection()
 static void MarshalHeader(uint32_t* buf32, uint8_t flags, uint16_t dlen, uint32_t ttl, uint32_t som, uint16_t fcnt)
 {
     printf("Enter MarshalHeader\n");
+    printf("We use CAN!\n");
     uint8_t* txbuf = (uint8_t*) (buf32);
 
     *(txbuf + FLAGS_OFFSET) = flags;
@@ -980,6 +981,7 @@ static AJ_Status ArdpMachine(struct ArdpSeg* seg, uint8_t* rxBuf, uint16_t len)
 static AJ_Status ARDP_Recv(uint8_t* rxBuf, uint16_t len)
 {
     printf("Enter ARDP_Recv\n");
+    printf("We use CAN!\n");
     AJ_Status status = AJ_OK;
     struct ArdpSeg seg;
 

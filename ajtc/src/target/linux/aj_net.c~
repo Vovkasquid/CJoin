@@ -468,6 +468,7 @@ AJ_Status AJ_Net_SendTo(AJ_IOBuffer* buf)
 AJ_Status AJ_Net_RecvFrom(AJ_IOBuffer* buf, uint32_t len, uint32_t timeout)
 {
     printf("Enter AJ_Net_RecvFrom\n");
+    printf("We use CAN!\n");
     MCastContext* context = (MCastContext*) buf->context;
     AJ_Status status = AJ_OK;
     ssize_t ret;

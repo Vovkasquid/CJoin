@@ -354,6 +354,7 @@ static AJ_Status RewriteSenderInfo(AJ_IOBuffer* buf, uint32_t addr, uint16_t por
 AJ_Status AJ_Net_SendTo(AJ_IOBuffer* buf)
 {
     printf("Enter AJ_Net_SendTo\n");
+    printf("We use CAN!\n");
     ssize_t ret = -1;
     uint8_t sendSucceeded = FALSE;
     size_t tx = AJ_IO_BUF_AVAIL(buf);
@@ -468,6 +469,7 @@ AJ_Status AJ_Net_SendTo(AJ_IOBuffer* buf)
 AJ_Status AJ_Net_RecvFrom(AJ_IOBuffer* buf, uint32_t len, uint32_t timeout)
 {
     printf("Enter AJ_Net_RecvFrom\n");
+    printf("We use CAN!\n");
     MCastContext* context = (MCastContext*) buf->context;
     AJ_Status status = AJ_OK;
     ssize_t ret;
