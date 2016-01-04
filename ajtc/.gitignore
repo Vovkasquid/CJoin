@@ -28,6 +28,7 @@ config.log
 *.creds
 *.a
 *.*~
+*~
 html/
 build/
 dist/
