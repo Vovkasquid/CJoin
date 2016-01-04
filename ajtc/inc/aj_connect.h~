@@ -91,7 +91,7 @@ AJ_Status AJ_Authenticate(AJ_BusAttachment* bus);
 AJ_EXPORT
 AJ_Status AJ_Connect(AJ_BusAttachment* bus, const char* serviceName, uint32_t timeout);
 
-#ifdef AJ_CAN
+#ifdef AJ_ARDP
 /**
  * Establish an ARDP-based AllJoyn UDP connection.
  *

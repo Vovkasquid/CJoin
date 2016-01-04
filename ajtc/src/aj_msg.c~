@@ -44,7 +44,7 @@
 #include <ajtcl/aj_authorisation.h>
 
 #ifdef AJ_CAN
-#include <ajtcl/aj_can.h>
+#include <ajtcl/can.h>
 #endif
 
 /**

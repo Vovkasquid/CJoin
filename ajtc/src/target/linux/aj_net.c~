@@ -51,8 +51,8 @@
 #include <ajtcl/aj_config.h>
 #include <ajtcl/aj_std.h>
 
-#ifdef AJ_ARDP
-#include <ajtcl/aj_ardp.h>
+#ifdef AJ_CAN
+#include <ajtcl/aj_can.h>
 #endif
 
 /**
@@ -115,7 +115,8 @@ typedef struct {
 static NetContext netContext = { INVALID_SOCKET };
 static MCastContext mCastContext = { INVALID_SOCKET, INVALID_SOCKET, INVALID_SOCKET, INVALID_SOCKET };
 
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
+
 /**
  * Need to predeclare a few things for ARDP
  */
@@ -189,7 +190,7 @@ AJ_Status AJ_Net_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
 
     AJ_InfoPrintf(("AJ_Net_Connect(bus=0x%p, addrType=%d.)\n", bus, service->addrTypes));
 
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
     if (service->addrTypes & (AJ_ADDR_UDP4 | AJ_ADDR_UDP6)) {
         status = AJ_Net_ARDP_Connect(bus, service);
         if (status == AJ_OK) {
@@ -211,7 +212,7 @@ void AJ_Net_Disconnect(AJ_NetSocket* netSock)
     }
 
     if (netContext.udpSock != INVALID_SOCKET) {
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
         // we are using UDP!
         AJ_Net_ARDP_Disconnect(netSock);
         memset(netSock, 0, sizeof(AJ_NetSocket));
@@ -847,7 +848,7 @@ void AJ_Net_MCastDown(AJ_MCastSocket* mcastSock)
     CloseMCastSock(mcastSock);
 }
 
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
 
 static AJ_Status AJ_ARDP_UDP_Send(void* context, uint8_t* buf, size_t len, size_t* sent, uint8_t confirm)
 {
