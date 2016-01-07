@@ -28,7 +28,8 @@
 #include <ajtcl/aj_debug.h>
 #include <ajtcl/aj_helper.h>
 #include <ajtcl/aj_config.h>
-#include <ajtcl/aj_net.h>
+//#include <ajtcl/aj_net.h> 
+#include <ajtcl/aj_netcan.h> 
 #include <ajtcl/aj_bus.h>
 #include <ajtcl/aj_disco.h>
 #include <ajtcl/aj_wifi_ctrl.h>
