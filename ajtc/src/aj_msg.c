@@ -43,6 +43,10 @@
 #include <ajtcl/aj_config.h>
 #include <ajtcl/aj_authorisation.h>
 
+#ifdef AJ_CAN
+#include <ajtcl/aj_can.h>
+#endif
+
 #ifdef AJ_ARDP
 #include <ajtcl/aj_ardp.h>
 #endif
@@ -2038,6 +2042,9 @@ static AJ_Status MarshalMsg(AJ_Message* msg, uint8_t msgType, uint32_t msgId, ui
         AJ_ErrPrintf(("MarshalMsg(): ioBuf has not been initialized\n"));
         return AJ_ERR_IO_BUFFER;
     }
+#ifdef AJ_CAN
+    status = AJ_ARDP_StartMsgSend(msg->ttl);
+#endif
 #ifdef AJ_ARDP
     status = AJ_ARDP_StartMsgSend(msg->ttl);
 #endif
