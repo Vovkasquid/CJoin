@@ -22,7 +22,7 @@
 #ifndef _ALLJOYN_ARDP_PROTOCOL_H
 #define _ALLJOYN_ARDP_PROTOCOL_H
 
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
 
 #ifdef __cplusplus
 extern "C" {
