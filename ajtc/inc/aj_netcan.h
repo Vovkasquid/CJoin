@@ -1,5 +1,5 @@
-#ifndef _AJ_NET_H
-#define _AJ_NET_H
+#ifndef _AJ_NETCAN_H
+#define _AJ_NETCAN_H
 
 /**
  * @file aj_net.h

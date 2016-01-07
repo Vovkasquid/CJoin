@@ -29,7 +29,7 @@ extern "C" {
 
 #include <ajtcl/aj_can.h>
 #include <ajtcl/aj_msg.h>
-#include <ajtcl/aj_net.h>
+#include <ajtcl/aj_netcan.h>
 #include <ajtcl/aj_crypto.h>
 #include <ajtcl/aj_debug.h>
 #include <ajtcl/aj_util.h>

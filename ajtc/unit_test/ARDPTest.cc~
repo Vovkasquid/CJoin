@@ -16,13 +16,13 @@
  *    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  ******************************************************************************/
 
-#ifdef AJ_ARDP
+#ifdef AJ_CAN
 
 #include <gtest/gtest.h>
 
 #include <ajtcl/aj_debug.h>
 #include <ajtcl/alljoyn.h>
-#include <ajtcl/aj_ardp.h>
+#include <ajtcl/aj_can.h>
 
 #define ARDP_FLAG_SYN  0x01    /**< Control flag. Request to open a connection.  Must be separate segment. */
 #define ARDP_FLAG_ACK  0x02    /**< Control flag. Acknowledge a segment. May accompany message */

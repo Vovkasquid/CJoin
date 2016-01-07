@@ -29,7 +29,7 @@ extern "C" {
 #endif
 
 #include <ajtcl/aj_bufio.h>
-#include <ajtcl/aj_net.h>
+#include <ajtcl/aj_netcan.h>
 #include <ajtcl/aj_status.h>
 #include <ajtcl/aj_target.h>
 #include <ajtcl/aj_config.h>

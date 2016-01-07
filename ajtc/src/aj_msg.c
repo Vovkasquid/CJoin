@@ -47,6 +47,10 @@
 #include <ajtcl/aj_can.h>
 #endif
 
+#ifdef AJ_ARDP
+#include <ajtcl/aj_ardp.h>
+#endif
+
 /**
  * Turn on per-module debug printing by setting this variable to non-zero value
  * (usually in debugger).
@@ -2039,6 +2043,9 @@ static AJ_Status MarshalMsg(AJ_Message* msg, uint8_t msgType, uint32_t msgId, ui
         return AJ_ERR_IO_BUFFER;
     }
 #ifdef AJ_CAN
+    status = AJ_ARDP_StartMsgSend(msg->ttl);
+#endif
+#ifdef AJ_ARDP
     status = AJ_ARDP_StartMsgSend(msg->ttl);
 #endif
 

@@ -42,7 +42,7 @@
 
 #include <ajtcl/aj_target.h>
 #include <ajtcl/aj_bufio.h>
-#include <ajtcl/aj_net.h>
+#include <ajtcl/aj_netcan.h>
 #include <ajtcl/aj_util.h>
 #include <ajtcl/aj_debug.h>
 #include <ajtcl/aj_connect.h>
@@ -53,6 +53,10 @@
 
 #ifdef AJ_CAN
 #include <ajtcl/aj_can.h>
+#endif
+
+#ifdef AJ_ARDP
+#include <ajtcl/aj_ardp.h>
 #endif
 
 /**
@@ -99,6 +103,7 @@ static const char MDNS_IPV6_MULTICAST_GROUP[] = "ff02::fb";
  * Target-specific contexts for network I/O
  */
 typedef struct {
+    int tcpSock;
     int udpSock;
 } NetContext;
 
@@ -123,8 +128,37 @@ static MCastContext mCastContext = { INVALID_SOCKET, INVALID_SOCKET, INVALID_SOC
 static AJ_Status AJ_Net_ARDP_Connect(AJ_BusAttachment* bus, const AJ_Service* service);
 static void AJ_Net_ARDP_Disconnect(AJ_NetSocket* netSock);
 
+#endif // AJ_CAN
+
+#ifdef AJ_ARDP
+
+/**
+ * Need to predeclare a few things for ARDP
+ */
+static AJ_Status AJ_Net_ARDP_Connect(AJ_BusAttachment* bus, const AJ_Service* service);
+static void AJ_Net_ARDP_Disconnect(AJ_NetSocket* netSock);
+
 #endif // AJ_ARDP
 
+#ifdef AJ_TCP
+static AJ_Status CloseNetSock(AJ_NetSocket* netSock)
+{
+    NetContext* context = (NetContext*)netSock->rx.context;
+    if (context) {
+        if (context->tcpSock != INVALID_SOCKET) {
+            struct linger l;
+            l.l_onoff = 1;
+            l.l_linger = 0;
+            setsockopt(context->tcpSock, SOL_SOCKET, SO_LINGER, (void*)&l, sizeof(l));
+            shutdown(context->tcpSock, SHUT_RDWR);
+            close(context->tcpSock);
+        }
+        context->tcpSock = INVALID_SOCKET;
+        memset(netSock, 0, sizeof(AJ_NetSocket));
+    }
+    return AJ_OK;
+}
+#endif
 
 static AJ_Status CloseMCastSock(AJ_MCastSocket* mcastSock)
 {
@@ -151,7 +185,33 @@ static AJ_Status CloseMCastSock(AJ_MCastSocket* mcastSock)
     return AJ_OK;
 }
 
+#ifdef AJ_TCP
+AJ_Status AJ_Net_Send(AJ_IOBuffer* buf)
+{
+    NetContext* context = (NetContext*) buf->context;
+    ssize_t ret;
+    size_t tx = AJ_IO_BUF_AVAIL(buf);
 
+    AJ_InfoPrintf(("AJ_Net_Send(buf=0x%p)\n", buf));
+
+    assert(buf->direction == AJ_IO_BUF_TX);
+
+    if (tx > 0) {
+        ret = send(context->tcpSock, buf->readPtr, tx, MSG_NOSIGNAL);
+        if (ret == -1) {
+            AJ_ErrPrintf(("AJ_Net_Send(): send() failed. errno=\"%s\", status=AJ_ERR_WRITE\n", strerror(errno)));
+            return AJ_ERR_WRITE;
+        }
+        buf->readPtr += ret;
+    }
+    if (AJ_IO_BUF_AVAIL(buf) == 0) {
+        AJ_IO_BUF_RESET(buf);
+    }
+
+    AJ_InfoPrintf(("AJ_Net_Send(): status=AJ_OK\n"));
+    return AJ_OK;
+}
+#endif
 
 /*
  * An eventfd handle used for interrupting a network read blocked on select
@@ -176,10 +236,126 @@ void AJ_Net_Interrupt()
     }
 }
 
+#ifdef AJ_TCP
+AJ_Status AJ_Net_Recv(AJ_IOBuffer* buf, uint32_t len, uint32_t timeout)
+{
+    NetContext* context = (NetContext*) buf->context;
+    AJ_Status status = AJ_OK;
+    size_t rx = AJ_IO_BUF_SPACE(buf);
+    fd_set fds;
+    int rc = 0;
+    int maxFd = context->tcpSock;
+    struct timeval tv = { timeout / 1000, 1000 * (timeout % 1000) };
+
+    // AJ_InfoPrintf(("AJ_Net_Recv(buf=0x%p, len=%d, timeout=%d)\n", buf, len, timeout));
+
+    assert(buf->direction == AJ_IO_BUF_RX);
+
+    FD_ZERO(&fds);
+    FD_SET(context->tcpSock, &fds);
+    if (interruptFd >= 0) {
+        FD_SET(interruptFd, &fds);
+        maxFd = max(maxFd, interruptFd);
+    }
+    blocked = TRUE;
+    rc = select(maxFd + 1, &fds, NULL, NULL, &tv);
+    blocked = FALSE;
+    if (rc == 0) {
+        return AJ_ERR_TIMEOUT;
+    }
+    if ((interruptFd >= 0) && FD_ISSET(interruptFd, &fds)) {
+        uint64_t u64;
+        if (read(interruptFd, &u64, sizeof(u64)) < 0) {
+            AJ_ErrPrintf(("AJ_Net_Recv(): read() failed during interrupt. errno=\"%s\"\n", strerror(errno)));
+        }
+        return AJ_ERR_INTERRUPTED;
+    }
+    rx = min(rx, len);
+    if (rx) {
+        ssize_t ret = recv(context->tcpSock, buf->writePtr, rx, 0);
+        if ((ret == -1) || (ret == 0)) {
+            AJ_ErrPrintf(("AJ_Net_Recv(): recv() failed. errno=\"%s\"\n", strerror(errno)));
+            status = AJ_ERR_READ;
+        } else {
+            AJ_InfoPrintf(("AJ_Net_Recv(): recv'd %d from tcp\n", ret));
+            buf->writePtr += ret;
+        }
+    }
+    return status;
+}
+#endif
 
 static uint8_t rxData[AJ_RX_DATA_SIZE];
 static uint8_t txData[AJ_TX_DATA_SIZE];
 
+#ifdef AJ_TCP
+static AJ_Status AJ_TCP_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
+{
+    int ret;
+    struct sockaddr_storage addrBuf;
+    socklen_t addrSize;
+    int tcpSock = INVALID_SOCKET;
+
+    interruptFd = eventfd(0, O_NONBLOCK);  // Use O_NONBLOCK instead of EFD_NONBLOCK due to bug in OpenWrt's uCLibc
+    if (interruptFd < 0) {
+        AJ_ErrPrintf(("AJ_TCP_Connect(): failed to created interrupt event\n"));
+        goto ConnectError;
+    }
+
+    memset(&addrBuf, 0, sizeof(addrBuf));
+
+    tcpSock = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcpSock == INVALID_SOCKET) {
+        AJ_ErrPrintf(("AJ_TCP_Connect(): socket() failed.  status=AJ_ERR_CONNECT\n"));
+        goto ConnectError;
+    }
+    if (service->addrTypes & AJ_ADDR_TCP4) {
+        struct sockaddr_in* sa = (struct sockaddr_in*)&addrBuf;
+        sa->sin_family = AF_INET;
+        sa->sin_port = htons(service->ipv4port);
+        sa->sin_addr.s_addr = service->ipv4;
+        addrSize = sizeof(struct sockaddr_in);
+        AJ_InfoPrintf(("AJ_TCP_Connect(): Connect to \"%s:%u\"\n", inet_ntoa(sa->sin_addr), service->ipv4port));;
+    } else if (service->addrTypes & AJ_ADDR_TCP6) {
+        struct sockaddr_in6* sa = (struct sockaddr_in6*)&addrBuf;
+        sa->sin6_family = AF_INET6;
+        sa->sin6_port = htons(service->ipv6port);
+        memcpy(sa->sin6_addr.s6_addr, service->ipv6, sizeof(sa->sin6_addr.s6_addr));
+        addrSize = sizeof(struct sockaddr_in6);
+    } else {
+        AJ_ErrPrintf(("AJ_TCP_Connect(): Invalid addrTypes %u, status=AJ_ERR_CONNECT\n", service->addrTypes));
+        goto ConnectError;
+    }
+
+
+    ret = connect(tcpSock, (struct sockaddr*)&addrBuf, addrSize);
+    if (ret < 0) {
+        AJ_ErrPrintf(("AJ_TCP_Connect(): connect() failed. errno=\"%s\", status=AJ_ERR_CONNECT\n", strerror(errno)));
+        goto ConnectError;
+    } else {
+        netContext.tcpSock = tcpSock;
+        AJ_IOBufInit(&bus->sock.rx, rxData, sizeof(rxData), AJ_IO_BUF_RX, &netContext);
+        bus->sock.rx.recv = AJ_Net_Recv;
+        AJ_IOBufInit(&bus->sock.tx, txData, sizeof(txData), AJ_IO_BUF_TX, &netContext);
+        bus->sock.tx.send = AJ_Net_Send;
+        AJ_InfoPrintf(("AJ_TCP_Connect(): status=AJ_OK\n"));
+    }
+
+    return AJ_OK;
+
+ConnectError:
+    if (interruptFd != INVALID_SOCKET) {
+        close(interruptFd);
+        interruptFd = INVALID_SOCKET;
+    }
+
+    if (tcpSock != INVALID_SOCKET) {
+        close(tcpSock);
+    }
+
+    return AJ_ERR_CONNECT;
+}
+#endif
 
 
 
@@ -199,6 +375,20 @@ AJ_Status AJ_Net_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
         }
     }
 #endif
+#ifdef AJ_ARDP
+    if (service->addrTypes & (AJ_ADDR_UDP4 | AJ_ADDR_UDP6)) {
+        status = AJ_Net_ARDP_Connect(bus, service);
+        if (status == AJ_OK) {
+            printf("Exit AJ_Net_Connect. return AJ_OK\n");
+            return status;
+        }
+    }
+#endif
+#ifdef AJ_TCP
+    if (service->addrTypes & (AJ_ADDR_TCP4 | AJ_ADDR_TCP6)) {
+        status = AJ_TCP_Connect(bus, service);
+    }
+#endif
     printf("Exit AJ_Net_Connect. Return status\n");
     return status;
 }
@@ -213,10 +403,21 @@ void AJ_Net_Disconnect(AJ_NetSocket* netSock)
 
     if (netContext.udpSock != INVALID_SOCKET) {
 #ifdef AJ_CAN
-        // we are using UDP!
+        // we are using CAN!
         AJ_Net_ARDP_Disconnect(netSock);
         memset(netSock, 0, sizeof(AJ_NetSocket));
         printf("Exit AJ_Net_Disconnect\n");
+#endif
+
+#ifdef AJ_ARDP
+        // we are using ARDP!
+        AJ_Net_ARDP_Disconnect(netSock);
+        memset(netSock, 0, sizeof(AJ_NetSocket));
+        printf("Exit AJ_Net_Disconnect\n");
+#endif
+
+#ifdef AJ_TCP
+        CloseNetSock(netSock);
 #endif
     }
 }
@@ -851,6 +1052,190 @@ void AJ_Net_MCastDown(AJ_MCastSocket* mcastSock)
 }
 
 #ifdef AJ_CAN
+
+static AJ_Status AJ_ARDP_UDP_Send(void* context, uint8_t* buf, size_t len, size_t* sent, uint8_t confirm)
+{
+    
+    AJ_Status status = AJ_OK;
+    ssize_t ret;
+    NetContext* ctx = (NetContext*) context;
+
+    AJ_InfoPrintf(("AJ_ARDP_UDP_Send(buf=0x%p, len=%lu)\n", buf, len));
+
+    // we can send( rather than sendto( because we did a UDP connect()
+    ret = send(ctx->udpSock, buf, len, (confirm == TRUE) ? MSG_CONFIRM : 0);
+    if (ret == -1) {
+        status = AJ_ERR_WRITE;
+    } else {
+        *sent = (size_t) ret;
+    }
+
+    return status;
+}
+
+static AJ_Status AJ_ARDP_UDP_Recv(void* context, uint8_t** data, uint32_t* recved, uint32_t timeout)
+{
+    printf("Enter AJ_ARDP_UDP_Recv\n");
+    fd_set fds;
+    struct timeval tv = { timeout / 1000, 1000 * (timeout % 1000) };
+    int ret;
+    NetContext* ctx = (NetContext*) context;
+    int maxFd = max(ctx->udpSock, interruptFd);
+
+    /**
+     * Let the platform code own this buffer.  This makes it easier to avoid double-buffering
+     * on platforms that allow it.
+     */
+    static uint8_t buffer[UDP_SEGBMAX];
+
+    *data = NULL;
+
+    AJ_InfoPrintf(("AJ_ARDP_UDP_Recv(data=0x%p, recved=0x%p, timeout=%u)\n", data, recved, timeout));
+
+    FD_ZERO(&fds);
+    FD_SET(ctx->udpSock, &fds);
+    if (interruptFd > 0) {
+        FD_SET(interruptFd, &fds);
+    }
+
+    blocked = TRUE;
+    ret = select(maxFd + 1, &fds, NULL, NULL, &tv);
+    blocked = FALSE;
+
+    if (ret == 0) {
+        // timeout!
+        printf("Exit AJ_ARDP_UDP_Recv. Return AJ_ERR_TIMEOUT\n");
+        return AJ_ERR_TIMEOUT;
+    } else if (ret == -1) {
+        perror("select");
+        printf("Exit AJ_ARDP_UDP_Recv. Return AJ_ERR_READ\n");
+        return AJ_ERR_READ;
+    } else if ((interruptFd > 0) && FD_ISSET(interruptFd, &fds)) {
+        uint64_t u64;
+        read(interruptFd, &u64, sizeof(u64));
+        printf("Exit AJ_ARDP_UDP_Recv. Return AJ_ERR_INTERRUPTED\n");
+        return AJ_ERR_INTERRUPTED;
+    } else if (FD_ISSET(ctx->udpSock, &fds)) {
+        ret = recvfrom(ctx->udpSock, buffer, sizeof(buffer), 0, NULL, 0);
+
+        if (ret == -1) {
+            // this will only happen if we are on a local machine
+            perror("recvfrom");
+            printf("Exit AJ_ARDP_UDP_Recv. Return AJ_ERR_READ\n");
+            return AJ_ERR_READ;
+        }
+
+        *recved = ret;
+        *data = buffer;
+    }
+    
+    printf("Exit AJ_ARDP_UDP_Recv. Return AJ_OK\n");
+    return AJ_OK;
+}
+
+static AJ_Status AJ_Net_ARDP_Connect(AJ_BusAttachment* bus, const AJ_Service* service)
+{
+    printf("Exit AJ_Net_ARDP_Connect\n");
+    int udpSock = INVALID_SOCKET;
+    AJ_Status status;
+    struct sockaddr_storage addrBuf;
+    socklen_t addrSize;
+    int ret;
+
+    AJ_ARDP_InitFunctions(AJ_ARDP_UDP_Recv, AJ_ARDP_UDP_Send);
+
+    memset(&addrBuf, 0, sizeof(addrBuf));
+
+    interruptFd = eventfd(0, O_NONBLOCK);  // Use O_NONBLOCK instead of EFD_NONBLOCK due to bug in OpenWrt's uCLibc
+    if (interruptFd < 0) {
+        AJ_ErrPrintf(("AJ_Net_ARDP_Connect(): failed to created interrupt event\n"));
+        goto ConnectError;
+    }
+
+    if (service->addrTypes & AJ_ADDR_UDP4) {
+        struct sockaddr_in* sa = (struct sockaddr_in*) &addrBuf;
+        udpSock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (udpSock == INVALID_SOCKET) {
+            AJ_ErrPrintf(("AJ_Net_ARDP_Connect(): socket() failed.  status=AJ_ERR_CONNECT\n"));
+            goto ConnectError;
+        }
+
+        sa->sin_family = AF_INET;
+        sa->sin_port = htons(service->ipv4portUdp);
+        sa->sin_addr.s_addr = service->ipv4Udp;
+        addrSize = sizeof(struct sockaddr_in);
+        AJ_InfoPrintf(("AJ_Net_ARDP_Connect(): Connect to \"%s:%u\"\n", inet_ntoa(sa->sin_addr), service->ipv4portUdp));;
+    } else if (service->addrTypes & AJ_ADDR_UDP6) {
+        struct sockaddr_in6* sa = (struct sockaddr_in6*) &addrBuf;
+        udpSock = socket(AF_INET6, SOCK_DGRAM, 0);
+        if (udpSock == INVALID_SOCKET) {
+            AJ_ErrPrintf(("AJ_Net_ARDP_Connect(): socket() failed.  status=AJ_ERR_CONNECT\n"));
+            goto ConnectError;
+        }
+
+        sa->sin6_family = AF_INET6;
+        sa->sin6_port = htons(service->ipv6portUdp);
+        memcpy(sa->sin6_addr.s6_addr, service->ipv6Udp, sizeof(sa->sin6_addr.s6_addr));
+        addrSize = sizeof(struct sockaddr_in6);
+    } else {
+        AJ_ErrPrintf(("AJ_Net_ARDP_Connect(): Invalid addrTypes %u, status=AJ_ERR_CONNECT\n", service->addrTypes));
+        printf("Exit AJ_Net_ARDP_Connect. Return AJ_ERR_CONNECT\n");
+        return AJ_ERR_CONNECT;
+    }
+
+    // When you 'connect' a UDP socket, it means that this is the default sendto address.
+    // Therefore, we don't have to make the address a global variable and can
+    // simply use send() rather than sendto().  See: man 7 udp
+    ret = connect(udpSock, (struct sockaddr*) &addrBuf, addrSize);
+
+    // must do this before calling AJ_MarshalMethodCall!
+    if (ret == 0) {
+        netContext.udpSock = udpSock;
+        AJ_IOBufInit(&bus->sock.rx, rxData, sizeof(rxData), AJ_IO_BUF_RX, &netContext);
+        bus->sock.rx.recv = AJ_ARDP_Recv;
+        AJ_IOBufInit(&bus->sock.tx, txData, sizeof(txData), AJ_IO_BUF_TX, &netContext);
+        bus->sock.tx.send = AJ_ARDP_Send;
+    } else {
+        AJ_ErrPrintf(("AJ_Net_ARDP_Connect(): Error connecting\n"));
+        perror("connect");
+        goto ConnectError;
+    }
+
+    status = AJ_ARDP_UDP_Connect(bus, &netContext, service, &bus->sock);
+    if (status != AJ_OK) {
+        AJ_Net_ARDP_Disconnect(&bus->sock);
+        goto ConnectError;
+    }
+    printf("Exit AJ_Net_ARDP_Connect. Return AJ_OK\n");
+    return AJ_OK;
+
+ConnectError:
+    if (interruptFd != INVALID_SOCKET) {
+        close(interruptFd);
+        interruptFd = INVALID_SOCKET;
+    }
+
+    if (udpSock != INVALID_SOCKET) {
+        close(udpSock);
+    }
+    printf("Exit AJ_Net_ARDP_Connect. Return ConnectError\n");
+    return AJ_ERR_CONNECT;
+}
+
+static void AJ_Net_ARDP_Disconnect(AJ_NetSocket* netSock)
+{
+    printf("Enter AJ_Net_ARDP_Disconnect\n");
+    AJ_ARDP_Disconnect(FALSE);
+
+    close(netContext.udpSock);
+    netContext.udpSock = INVALID_SOCKET;
+    memset(netSock, 0, sizeof(AJ_NetSocket));
+    printf("Exit AJ_Net_ARDP_Disconnect\n");
+}
+
+#endif // AJ_CAN
+
+#ifdef AJ_ARDP
 
 static AJ_Status AJ_ARDP_UDP_Send(void* context, uint8_t* buf, size_t len, size_t* sent, uint8_t confirm)
 {
