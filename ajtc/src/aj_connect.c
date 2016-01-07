@@ -29,7 +29,8 @@
 #include <ajtcl/aj_msg.h>
 #include <ajtcl/aj_connect.h>
 #include <ajtcl/aj_introspect.h>
-#include <ajtcl/aj_net.h>
+#include <ajtcl/aj_netcan.h>
+//#include <ajtcl/aj_net.h>
 #include <ajtcl/aj_bus.h>
 #include <ajtcl/aj_bus_priv.h>
 #include <ajtcl/aj_disco.h>
@@ -41,6 +42,9 @@
 #include <ajtcl/aj_authorisation.h>
 #include <ajtcl/aj_security.h>
 
+#ifdef AJ_CAN
+#include <ajtcl/aj_can.h>
+#endif
 #ifdef AJ_ARDP
 #include <ajtcl/aj_ardp.h>
 #endif
@@ -621,6 +625,83 @@ ExitConnect:
 
     return status;
 }
+
+#ifdef AJ_CAN
+
+AJ_Status AJ_ARDP_UDP_Connect(AJ_BusAttachment* bus, void* context, const AJ_Service* service, AJ_NetSocket* netSock)
+{
+    AJ_Message hello;
+    AJ_GUID localGuid;
+    char guid_buf[33];
+    AJ_Status status;
+    AJ_Message helloResponse;
+
+    AJ_GetLocalGUID(&localGuid);
+    AJ_GUID_ToString(&localGuid, guid_buf, sizeof(guid_buf));
+
+    AJ_MarshalMethodCall(bus, &hello, AJ_METHOD_BUS_SIMPLE_HELLO, AJ_BusDestination, 0, AJ_FLAG_ALLOW_REMOTE_MSG, AJ_UDP_CONNECT_TIMEOUT);
+    AJ_MarshalArgs(&hello, "su", guid_buf, 10);
+    hello.hdr->bodyLen = hello.bodyBytes;
+
+    status = AJ_ARDP_Connect(bus->sock.tx.readPtr, AJ_IO_BUF_AVAIL(&bus->sock.tx), context, netSock);
+    if (status != AJ_OK) {
+        return status;
+    }
+
+    status = AJ_UnmarshalMsg(bus, &helloResponse, AJ_UDP_CONNECT_TIMEOUT);
+    if (status == AJ_OK && helloResponse.msgId == AJ_REPLY_ID(AJ_METHOD_BUS_SIMPLE_HELLO)) {
+        if (helloResponse.hdr->msgType == AJ_MSG_ERROR) {
+            status = AJ_ERR_CONNECT;
+        } else {
+            AJ_Arg uniqueName, protoVersion;
+            AJ_UnmarshalArg(&helloResponse, &uniqueName);
+            AJ_SkipArg(&helloResponse);
+            AJ_UnmarshalArg(&helloResponse, &protoVersion);
+
+            /**
+             * The two most-significant bits are reserved for the nameType,
+             * which we don't currently care about in the thin client
+             */
+            routingProtoVersion = (uint8_t) ((*protoVersion.val.v_uint32) & 0x3FFFFFFF);
+
+            if (uniqueName.len >= (sizeof(bus->uniqueName) - 1)) {
+                AJ_ErrPrintf(("AJ_ARDP_Connect(): Blacklisting routing node, uniqueName.len = %d\n", uniqueName.len));
+                AddRoutingNodeToBlacklist(service, AJ_ADDR_UDP4);
+                status = AJ_ERR_ACCESS_ROUTING_NODE;
+            } else {
+                memcpy(bus->uniqueName, uniqueName.val.v_string, uniqueName.len);
+                bus->uniqueName[uniqueName.len] = '\0';
+            }
+
+            AJ_InfoPrintf(("Received name: %s and version %u\n", bus->uniqueName, routingProtoVersion));
+            if (routingProtoVersion < AJ_GetMinProtoVersion()) {
+                AJ_InfoPrintf(("AJ_ARDP_Connect(): Blacklisting routing node, found %u but require >= %u\n",
+                               routingProtoVersion, AJ_GetMinProtoVersion()));
+                // add to blacklist because of invalid version
+                AddRoutingNodeToBlacklist(service, AJ_ADDR_UDP4);
+                status = AJ_ERR_OLD_VERSION;
+            }
+        }
+    } else {
+        status = AJ_ERR_CONNECT;
+    }
+
+    AJ_CloseMsg(&helloResponse);
+
+    // reset the transmit queue!
+    AJ_IO_BUF_RESET(&bus->sock.tx);
+
+    if (status == AJ_OK) {
+        // ARDP does not require additional authentication
+        bus->isAuthenticated = TRUE;
+        // ARDP does not require ProbeReq/ProbeAck
+        bus->isProbeRequired = FALSE;
+    }
+
+    return status;
+}
+
+#endif // AJ_CAN
 
 #ifdef AJ_ARDP
 
